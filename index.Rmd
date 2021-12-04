@@ -395,14 +395,14 @@ knitr::include_graphics("img/after_scale-resolved.png", error = FALSE)
 
 **Links**:
 
-- Github repo: [https://github.com/yjunechoe/ggtrace/](https://github.com/yjunechoe/ggtrace/)
-- pkgdown website: [https://yjunechoe.github.io/ggtrace/](https://yjunechoe.github.io/ggtrace/)
-- slides: []
+- Github repo: [https://github.com/yjunechoe/ggtrace](https://github.com/yjunechoe/ggtrace/)
+- pkgdown website: [https://yjunechoe.github.io/ggtrace](https://yjunechoe.github.io/ggtrace/)
+- slides: [https://yjunechoe.github.io/ggtrace-talk](https://yjunechoe.github.io/ggtrace-talk/)
 
 **Vignettes**:
 
-- [FAQ](https://yjunechoe.github.io/ggtrace/articles/FAQ.html)
-- [`ggplot_build` showcase](https://xenodochial-franklin-34d864.netlify.app/)
-- [`aes_eval` showcase](https://goofy-lovelace-d330f8.netlify.app/)
+- [Frequently Asked Questions](https://yjunechoe.github.io/ggtrace/articles/FAQ.html)
+- [`ggplot_build` showcase (draft)](https://xenodochial-franklin-34d864.netlify.app/)
+- [`aes_eval` showcase (draft)](https://goofy-lovelace-d330f8.netlify.app/)
 - [{ggxmean} debugging case study](https://yjunechoe.github.io/ggtrace/articles/casestudy-ggxmean.html)
 

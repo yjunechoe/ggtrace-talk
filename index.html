@@ -166,7 +166,7 @@ my_plot &lt;- penguins_base +
 my_plot
 ```
 
-![](ggtrace-flipbook_files/figure-html/unnamed-chunk-2-1.png)&lt;!-- --&gt;
+![](index_files/figure-html/unnamed-chunk-2-1.png)&lt;!-- --&gt;
 
 ---
 
@@ -266,7 +266,7 @@ penguins_plot1 &lt;- penguins_base +
 ]
 
 .pull-right[
-![](ggtrace-flipbook_files/figure-html/unnamed-chunk-7-1.png)&lt;!-- --&gt;
+![](index_files/figure-html/unnamed-chunk-7-1.png)&lt;!-- --&gt;
 ]
 
 --
@@ -310,7 +310,7 @@ penguins_plot2 &lt;- penguins_base +
 ]
 
 .pull-right[
-![](ggtrace-flipbook_files/figure-html/unnamed-chunk-10-1.png)&lt;!-- --&gt;
+![](index_files/figure-html/unnamed-chunk-10-1.png)&lt;!-- --&gt;
 ]
 
 
@@ -343,7 +343,7 @@ We need to track the data as it gets transformed _in the assembly line_
 
 # Inspecting the assembly line
 
-In a true know-nothing fashion, we're just going to log the data after every step that transforms it
+In a true know-nothing fashion, we're just going to log the data after every step that transforms it inside `ggplot_build()`
 
 
 ```r
@@ -524,7 +524,7 @@ which(sapply(last_ggtrace(), function(x) {"fill" %in% colnames(x)}))
 
 ---
 
-# Voilla!
+# Yay!
 
 [Check out the answer key for yourself!](https://github.com/tidyverse/ggplot2/blob/65d3bfc21b279a799a5450272664625b01c8778f/R/geom-.r#L124-L150)
 
@@ -536,17 +536,16 @@ which(sapply(last_ggtrace(), function(x) {"fill" %in% colnames(x)}))
 
 **Links**:
 
-- Github repo: [https://github.com/yjunechoe/ggtrace/](https://github.com/yjunechoe/ggtrace/)
-- pkgdown website: [https://yjunechoe.github.io/ggtrace/](https://yjunechoe.github.io/ggtrace/)
+- Github repo: [https://github.com/yjunechoe/ggtrace](https://github.com/yjunechoe/ggtrace/)
+- pkgdown website: [https://yjunechoe.github.io/ggtrace](https://yjunechoe.github.io/ggtrace/)
+- slides: [https://yjunechoe.github.io/ggtrace-talk](https://yjunechoe.github.io/ggtrace-talk/)
 
 **Vignettes**:
 
-- [FAQ](https://yjunechoe.github.io/ggtrace/articles/FAQ.html)
-- [`ggplot_build` showcase](https://xenodochial-franklin-34d864.netlify.app/)
-- [`aes_eval` showcase](https://goofy-lovelace-d330f8.netlify.app/)
+- [Frequently Asked Questions](https://yjunechoe.github.io/ggtrace/articles/FAQ.html)
+- [`ggplot_build` showcase (draft)](https://xenodochial-franklin-34d864.netlify.app/)
+- [`aes_eval` showcase (draft)](https://goofy-lovelace-d330f8.netlify.app/)
 - [{ggxmean} debugging case study](https://yjunechoe.github.io/ggtrace/articles/casestudy-ggxmean.html)
-
-Thank you for listening!
 
     </textarea>
 <style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>

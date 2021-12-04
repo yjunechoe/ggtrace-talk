@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="" xml:lang="">
+  <head>
+    <title>Cracking open the internals of ggplot</title>
+    <meta charset="utf-8" />
+    <meta name="author" content="June Choe @yjunechoe&lt;br&gt;4 December 2021" />
+    <script src="libs/header-attrs-2.11/header-attrs.js"></script>
+    <link href="libs/remark-css-0.0.1/default.css" rel="stylesheet" />
+    <link href="libs/remark-css-0.0.1/rladies.css" rel="stylesheet" />
+    <link href="libs/remark-css-0.0.1/rladies-fonts.css" rel="stylesheet" />
+    <link href="libs/xaringanExtra-extra-styles-0.2.6/xaringanExtra-extra-styles.css" rel="stylesheet" />
+    <link rel="stylesheet" href="css/rladies-mod.css" type="text/css" />
+  </head>
+  <body>
+    <textarea id="source">
+class: center, middle, inverse, title-slide
+
+# Cracking open the internals of ggplot
+## A {ggtrace} showcase
+### June Choe<br><span class="citation">@yjunechoe&lt;br&gt;4</span> December 2021
+
+---
+
+
+
+
+# The ggplot internals beastiary
+
+--
+
+😮 {ggplot2} is old (2005~), but the last &amp; most important overhaul of the internals (ggproto) was pretty recent ([v2.0.0](https://www.rstudio.com/blog/ggplot2-2-0-0/), December 2015)
+
+--
+
+⚠️ Guides on ggplot internals are extremely sparse and scattered, and many are also outdated (but see [[1](https://github.com/paleolimbot/ggdebug)], [[2](https://htmlpreview.github.io/?https://raw.githubusercontent.com/brodieG/ggbg/development/inst/doc/extensions.html)], [[3](https://cran.r-project.org/web/packages/gginnards/vignettes/user-guide-1.html)], [[4](https://cran.r-project.org/web/packages/lemon/vignettes/gtable_show_lemonade.html)], [[5](https://cran.r-project.org/web/packages/gridExtra/vignettes/gtable.html)])
+
+--
+
+❗ There are no smooth entry points for aspiring developers. Even for experienced users, the sheer scale and foreignness is demotivating.
+
+--
+
+❗❗ More over, you can't learn this through exposure, _by design_. This unintentionally creates a monopoly around the knowledge of how ggplot works under the hood.
+
+--
+
+🤔 Do we patiently wait, relying on the mercy and sacrifice of experienced developers to host webinars, release official guides, and hold our hands through this journey?
+
+---
+
+# What's so hard about learning it ourselves?
+
+--
+
+🤓 Many useRs are self-taught and learn through trial and error
+
+--
+
+In fact a lot of what happens in the building of a ggplot is actually just good ol' ✨data wrangling✨
+
+--
+
+&gt; [ggprotos] are classes that are **stateless** in the sense that you have an object that receives some data and does something to the data and spits out the data again...
+
+&gt; ...you should think of [ggprotos] as kind of **factories**. You have this assembly line and each method is... **a robot arm**. 
+
+&lt;p style='text-align:right;'&gt;&lt;em&gt;- Thomas Lin Pedersen, rstudio::conf (2020)&lt;/em&gt;&lt;/figcaption&gt;
+
+---
+
+class: center, middle, inverse
+background-image: url(img/ggproto-factory.png)
+background-size: contain
+
+---
+
+# What's so hard about learning it ourselves?
+
+Many useRs are self-taught and learn through trial and error
+
+And a lot of what happens in the building of a ggplot is actually just good ol' ✨data wrangling✨
+
+&gt; [ggprotos] are classes that are **stateless** in the sense that you have an object that receives some data and does something to the data and spits out the data again...
+
+&gt; ...you should think of [ggprotos] as kind of **factories**. You have this assembly line and each method is... **a robot arm**. 
+
+&lt;p style='text-align:right;'&gt;&lt;em&gt;- Thomas Lin Pedersen, rstudio::conf (2020)&lt;/em&gt;&lt;/p&gt;
+
+&lt;strong style='color: #804782;'&gt;We &lt;em&gt;can&lt;/em&gt; learn ggplot internals ourselves - we just need a tool that allows us to peak inside and manipulate the assembly line as it runs&lt;/strong&gt;
+
+---
+
+# A different kind of accessibility problem
+
+--
+
+We want to interact with ggplot internals _from the outside_
+
+--
+
+But our familiar debugging tools fail us.
+
+--
+
+-----
+
+&lt;blockquote cite="https://yutani.rbind.io/post/a-tip-to-debug-ggplot2/"&gt;
+  "You cannot use breakpoints to dig into [ggprotos]."
+&lt;/blockquote&gt;
+&lt;p style='text-align:right;'&gt;&lt;em&gt;- Hiroaki Yutani, blog post (2019)&lt;/em&gt;&lt;/p&gt;
+
+&lt;blockquote cite="https://github.com/paleolimbot/ggdebug/blob/master/R/trace.R"&gt;
+  "[trace()] and [untrace()] ... do not work with ggproto methods"
+&lt;/blockquote&gt;
+&lt;p style='text-align:right;'&gt;&lt;em&gt;- Dewey Dunnington, {ggdebug} (2019)&lt;/em&gt;&lt;/p&gt;
+
+&lt;blockquote cite="https://www.rstudio.com/resources/rstudioconf-2020/extending-your-ability-to-extend-ggplot2/"&gt;
+  "ggproto methods are just horrible to debug."
+&lt;/blockquote&gt;
+&lt;p style='text-align:right;'&gt;&lt;em&gt;- Thomas Lin Pedersen, rstudio::conf (2020)&lt;/em&gt;&lt;/p&gt;
+
+---
+
+# Enter {ggtrace}!
+
+--
+
+**Goal: expose the internals of ggplot in the familiar _functional-programming_ sense, for learners and developers alike**
+
+--
+
+Here, we make some simplifying assumptions about ggplot internals:
+
+--
+
+The **input** - the _data_ being plotted &amp; the _instructions_ for plotting it
+
+  - The user-facing code `ggplot(data) + geom_*(...) + ...`
+
+--
+
+The **assembly line** - the _execution_ of plotting instructions on the data
+
+  - Each layer's Stat/Geom/Position methods transform the data
+
+--
+
+The **output** - the data prepared for rendering _graphical primitives_
+
+  - Between `ggplot_build()` and `ggplot_gtable()` at `print()`
+
+
+---
+
+# Our input
+
+
+```r
+penguins_base &lt;- ggplot(na.omit(palmerpenguins::penguins)) +
+  aes(x = species, color = species) +
+  theme_minimal()
+
+my_plot &lt;- penguins_base +
+  geom_bar(size = 2)
+
+my_plot
+```
+
+![](ggtrace-flipbook_files/figure-html/unnamed-chunk-2-1.png)&lt;!-- --&gt;
+
+---
+
+# Our target assembly line
+
+
+```r
+# ggplot2:::print.ggplot
+function (x, newpage = is.null(vp), vp = NULL, ...) 
+{
+  set_last_plot(x)
+  if (newpage) 
+    grid.newpage()
+  grDevices::recordGraphics(requireNamespace("ggplot2", quietly = TRUE), 
+                            list(), getNamespace("ggplot2"))
+* data &lt;- ggplot_build(x)
+  gtable &lt;- ggplot_gtable(data)
+  if (is.null(vp)) {
+    grid.draw(gtable)
+  }
+  else {
+    if (is.character(vp)) 
+      seekViewport(vp)
+    else pushViewport(vp)
+    grid.draw(gtable)
+    upViewport()
+  }
+  if (isTRUE(getOption("BrailleR.VI")) &amp;&amp; rlang::is_installed("BrailleR")) {
+    print(asNamespace("BrailleR")$VI(x))
+  }
+  invisible(x)
+}
+```
+
+---
+
+# Our output
+
+
+```r
+names(ggplot_build(my_plot))
+```
+
+```
+  [1] "data"   "layout" "plot"
+```
+
+```r
+ggplot_build(my_plot)$data[[1]]
+```
+
+```
+     colour   y count prop x flipped_aes PANEL group ymin ymax xmin xmax   fill
+  1 #F8766D 146   146    1 1       FALSE     1     1    0  146 0.55 1.45 grey35
+  2 #00BA38  68    68    1 2       FALSE     1     2    0   68 1.55 2.45 grey35
+  3 #619CFF 119   119    1 3       FALSE     1     3    0  119 2.55 3.45 grey35
+    size linetype alpha
+  1    2        1    NA
+  2    2        1    NA
+  3    2        1    NA
+```
+
+--
+
+
+```r
+layer_data(my_plot, 1)
+```
+
+```
+     colour   y count prop x flipped_aes PANEL group ymin ymax xmin xmax   fill
+  1 #F8766D 146   146    1 1       FALSE     1     1    0  146 0.55 1.45 grey35
+  2 #00BA38  68    68    1 2       FALSE     1     2    0   68 1.55 2.45 grey35
+  3 #619CFF 119   119    1 3       FALSE     1     3    0  119 2.55 3.45 grey35
+    size linetype alpha
+  1    2        1    NA
+  2    2        1    NA
+  3    2        1    NA
+```
+
+---
+
+# Example: delayed aesthetic evaluation (1)
+
+You can use `after_*()` functions to access computed variables
+
+.pull-left[
+
+```r
+penguins_plot1 &lt;- penguins_base +
+  geom_bar(size = 2) +
+  aes(
+    y = after_stat(count),
+    fill = after_scale(alpha(color, .5))
+  )
+```
+]
+
+.pull-right[
+![](ggtrace-flipbook_files/figure-html/unnamed-chunk-7-1.png)&lt;!-- --&gt;
+]
+
+--
+
+
+```r
+layer_data(penguins_plot1)
+```
+
+```
+         fill  colour   y count prop x flipped_aes PANEL group ymin ymax xmin
+  1 #F8766D80 #F8766D 146   146    1 1       FALSE     1     1    0  146 0.55
+  2 #00BA3880 #00BA38  68    68    1 2       FALSE     1     2    0   68 1.55
+  3 #619CFF80 #619CFF 119   119    1 3       FALSE     1     3    0  119 2.55
+    xmax size linetype alpha
+  1 1.45    2        1    NA
+  2 2.45    2        1    NA
+  3 3.45    2        1    NA
+```
+
+
+---
+
+# Example: delayed aesthetic evaluation (2)
+
+How would you explain this behavior?
+
+.pull-left[
+
+```r
+penguins_plot2 &lt;- penguins_base +
+  geom_bar(
+    size = 2,
+*   fill = "orange"
+  ) +
+  aes(
+    y = after_stat(count),
+    fill = after_scale(alpha(color, .5))
+  )
+```
+]
+
+.pull-right[
+![](ggtrace-flipbook_files/figure-html/unnamed-chunk-10-1.png)&lt;!-- --&gt;
+]
+
+
+```r
+layer_data(penguins_plot2)
+```
+
+```
+      fill  colour   y count prop x flipped_aes PANEL group ymin ymax xmin xmax
+  1 orange #F8766D 146   146    1 1       FALSE     1     1    0  146 0.55 1.45
+  2 orange #00BA38  68    68    1 2       FALSE     1     2    0   68 1.55 2.45
+  3 orange #619CFF 119   119    1 3       FALSE     1     3    0  119 2.55 3.45
+    size linetype alpha
+  1    2        1    NA
+  2    2        1    NA
+  3    2        1    NA
+```
+
+---
+
+# Testing a hypothesis about the internals
+
+**Does the `fill` aesthetic even get computed in `penguins_plot2`**?
+
+This question cannot be answered just by looking at the transformed data from the `ggplot_build()` output - both answers are consistent
+
+We need to track the data as it gets transformed _in the assembly line_
+
+---
+
+# Inspecting the assembly line
+
+In a true know-nothing fashion, we're just going to log the data after every step that transforms it
+
+
+```r
+data_assigning_steps &lt;- c(8, 9, 11, 12, 13, 17, 18, 19, 21, 22, 26, 29, 30, 31)
+as.character(ggbody(ggplot2:::ggplot_build.ggplot)[data_assigning_steps])
+```
+
+```
+   [1] "data &lt;- layer_data"                                             
+   [2] "data &lt;- by_layer(function(l, d) l$setup_layer(d, plot))"        
+   [3] "data &lt;- layout$setup(data, plot$data, plot$plot_env)"           
+   [4] "data &lt;- by_layer(function(l, d) l$compute_aesthetics(d, plot))" 
+   [5] "data &lt;- lapply(data, scales_transform_df, scales = scales)"     
+   [6] "data &lt;- layout$map_position(data)"                              
+   [7] "data &lt;- by_layer(function(l, d) l$compute_statistic(d, layout))"
+   [8] "data &lt;- by_layer(function(l, d) l$map_statistic(d, plot))"      
+   [9] "data &lt;- by_layer(function(l, d) l$compute_geom_1(d))"           
+  [10] "data &lt;- by_layer(function(l, d) l$compute_position(d, layout))" 
+  [11] "data &lt;- layout$map_position(data)"                              
+  [12] "data &lt;- by_layer(function(l, d) l$compute_geom_2(d))"           
+  [13] "data &lt;- by_layer(function(l, d) l$finish_statistics(d))"        
+  [14] "data &lt;- layout$finish_data(data)"
+```
+
+---
+
+# Inspecting the assembly line
+
+
+```r
+ggtrace(method = ggplot2:::ggplot_build.ggplot,
+        trace_steps = data_assigning_steps + 1,
+        trace_exprs = quote(data[[1]]),
+        verbose = FALSE)
+```
+
+```
+  `ggplot2:::ggplot_build.ggplot` now being traced.
+```
+
+```r
+penguins_plot2
+```
+
+```
+  Triggering trace on `ggplot2:::ggplot_build.ggplot`
+```
+
+```
+  Untracing `ggplot2:::ggplot_build.ggplot` on exit.
+```
+
+```r
+Filter(Negate(is.null), lapply(last_ggtrace(), `[[`, "fill"))
+```
+
+```
+  [[1]]
+  [1] "orange" "orange" "orange"
+  
+  [[2]]
+  [1] "orange" "orange" "orange"
+  
+  [[3]]
+  [1] "orange" "orange" "orange"
+```
+
+---
+
+# Inspecting the assembly line (again)
+
+Are we really sure that the `fill` aesthetic simply doesn't get calculated when it's supplied as a constant?
+
+Let's jump into the first robot arm that computes `fill`, and see whether it was ever calculated internally
+
+
+```r
+data_assigning_steps[which(sapply(last_ggtrace(), function(x) {"fill" %in% colnames(x)}))]
+```
+
+```
+  [1] 29 30 31
+```
+
+```r
+ggbody(ggplot2:::ggplot_build.ggplot)[[29]]
+```
+
+```
+  data &lt;- by_layer(function(l, d) l$compute_geom_2(d))
+```
+
+
+```r
+as.character(ggbody(ggplot2:::Layer$compute_geom_2))
+```
+
+```
+  [1] "`{`"                                                                           
+  [2] "if (empty(data)) return(data)"                                                 
+  [3] "aesthetics &lt;- self$computed_mapping"                                           
+  [4] "modifiers &lt;- aesthetics[is_scaled_aes(aesthetics) | is_staged_aes(aesthetics)]"
+  [5] "self$geom$use_defaults(data, self$aes_params, modifiers)"
+```
+
+---
+
+# Inspecting the assembly line (again)
+
+
+```r
+class(geom_bar()$geom)
+```
+
+```
+  [1] "GeomBar"  "GeomRect" "Geom"     "ggproto"  "gg"
+```
+
+```r
+ggbody(GeomBar$use_defauts)
+```
+
+```
+  Error: Method 'use_defauts' is not defined for `GeomBar`
+  Check inheritance with `ggbody(GeomBar$use_defauts, inherit = TRUE)`
+```
+
+```r
+invisible(capture.output(ggbody(GeomBar$use_defaults, inherit = TRUE)))
+```
+
+Again in a true know-nothing fashion, we log the value of `data` at every step
+
+
+```r
+ggtrace(method = Geom$use_defaults,
+        trace_steps = seq_along(ggbody(Geom$use_defaults)),
+        trace_exprs = quote(data),
+        verbose = FALSE)
+penguins_plot2
+```
+
+---
+
+# Inspecting the assembly line (again)
+
+Looks like we were wrong! Step 7 of `Geom$use_defaults` calculates the `fill` aesthetic according to `after_scale()`
+
+
+```r
+Filter(Negate(is.null), lapply(last_ggtrace(), `[[`, "fill"))
+```
+
+```
+  [[1]]
+  [1] "grey35" "grey35" "grey35"
+  
+  [[2]]
+  [1] "#F8766D80" "#00BA3880" "#619CFF80"
+  
+  [[3]]
+  [1] "#F8766D80" "#00BA3880" "#619CFF80"
+  
+  [[4]]
+  [1] "#F8766D80" "#00BA3880" "#619CFF80"
+  
+  [[5]]
+  [1] "orange" "orange" "orange"
+```
+
+```r
+which(sapply(last_ggtrace(), function(x) {"fill" %in% colnames(x)}))
+```
+
+```
+  [1]  6  7  8  9 10
+```
+
+---
+
+# Voilla!
+
+[Check out the answer key for yourself!](https://github.com/tidyverse/ggplot2/blob/65d3bfc21b279a799a5450272664625b01c8778f/R/geom-.r#L124-L150)
+
+&lt;img src="img/after_scale-resolved.png" width="3012" /&gt;
+
+---
+
+# The End
+
+**Links**:
+
+- Github repo: [https://github.com/yjunechoe/ggtrace/](https://github.com/yjunechoe/ggtrace/)
+- pkgdown website: [https://yjunechoe.github.io/ggtrace/](https://yjunechoe.github.io/ggtrace/)
+
+**Vignettes**:
+
+- [FAQ](https://yjunechoe.github.io/ggtrace/articles/FAQ.html)
+- [`ggplot_build` showcase](https://xenodochial-franklin-34d864.netlify.app/)
+- [`aes_eval` showcase](https://goofy-lovelace-d330f8.netlify.app/)
+- [{ggxmean} debugging case study](https://yjunechoe.github.io/ggtrace/articles/casestudy-ggxmean.html)
+
+Thank you for listening!
+
+    </textarea>
+<style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script>var slideshow = remark.create({
+"ratio": "4:3",
+"highlightStyle": "github",
+"highlightLines": true,
+"countIncrementalSlides": false
+});
+if (window.HTMLWidgets) slideshow.on('afterShowSlide', function (slide) {
+  window.dispatchEvent(new Event('resize'));
+});
+(function(d) {
+  var s = d.createElement("style"), r = d.querySelector(".remark-slide-scaler");
+  if (!r) return;
+  s.type = "text/css"; s.innerHTML = "@page {size: " + r.style.width + " " + r.style.height +"; }";
+  d.head.appendChild(s);
+})(document);
+
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css"; s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+// delete the temporary CSS (for displaying all slides initially) when the user
+// starts to view slides
+(function() {
+  var deleted = false;
+  slideshow.on('beforeShowSlide', function(slide) {
+    if (deleted) return;
+    var sheets = document.styleSheets, node;
+    for (var i = 0; i < sheets.length; i++) {
+      node = sheets[i].ownerNode;
+      if (node.dataset["target"] !== "print-only") continue;
+      node.parentNode.removeChild(node);
+    }
+    deleted = true;
+  });
+})();
+(function() {
+  "use strict"
+  // Replace <script> tags in slides area to make them executable
+  var scripts = document.querySelectorAll(
+    '.remark-slides-area .remark-slide-container script'
+  );
+  if (!scripts.length) return;
+  for (var i = 0; i < scripts.length; i++) {
+    var s = document.createElement('script');
+    var code = document.createTextNode(scripts[i].textContent);
+    s.appendChild(code);
+    var scriptAttrs = scripts[i].attributes;
+    for (var j = 0; j < scriptAttrs.length; j++) {
+      s.setAttribute(scriptAttrs[j].name, scriptAttrs[j].value);
+    }
+    scripts[i].parentElement.replaceChild(s, scripts[i]);
+  }
+})();
+(function() {
+  var links = document.getElementsByTagName('a');
+  for (var i = 0; i < links.length; i++) {
+    if (/^(https?:)?\/\//.test(links[i].getAttribute('href'))) {
+      links[i].target = '_blank';
+    }
+  }
+})();
+// adds .remark-code-has-line-highlighted class to <pre> parent elements
+// of code chunks containing highlighted lines with class .remark-code-line-highlighted
+(function(d) {
+  const hlines = d.querySelectorAll('.remark-code-line-highlighted');
+  const preParents = [];
+  const findPreParent = function(line, p = 0) {
+    if (p > 1) return null; // traverse up no further than grandparent
+    const el = line.parentElement;
+    return el.tagName === "PRE" ? el : findPreParent(el, ++p);
+  };
+
+  for (let line of hlines) {
+    let pre = findPreParent(line);
+    if (pre && !preParents.includes(pre)) preParents.push(pre);
+  }
+  preParents.forEach(p => p.classList.add("remark-code-has-line-highlighted"));
+})(document);</script>
+
+<script>
+slideshow._releaseMath = function(el) {
+  var i, text, code, codes = el.getElementsByTagName('code');
+  for (i = 0; i < codes.length;) {
+    code = codes[i];
+    if (code.parentNode.tagName !== 'PRE' && code.childElementCount === 0) {
+      text = code.textContent;
+      if (/^\\\((.|\s)+\\\)$/.test(text) || /^\\\[(.|\s)+\\\]$/.test(text) ||
+          /^\$\$(.|\s)+\$\$$/.test(text) ||
+          /^\\begin\{([^}]+)\}(.|\s)+\\end\{[^}]+\}$/.test(text)) {
+        code.outerHTML = code.innerHTML;  // remove <code></code>
+        continue;
+      }
+    }
+    i++;
+  }
+};
+slideshow._releaseMath(document);
+</script>
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+(function () {
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src  = 'https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-MML-AM_CHTML';
+  if (location.protocol !== 'file:' && /^https?:/.test(script.src))
+    script.src  = script.src.replace(/^https?:/, '');
+  document.getElementsByTagName('head')[0].appendChild(script);
+})();
+</script>
+  </body>
+</html>

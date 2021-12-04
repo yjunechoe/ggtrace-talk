@@ -1,0 +1,408 @@
+---
+title: "Cracking open the internals of ggplot"
+subtitle: "A {ggtrace} showcase"
+author: "June Choe<br>@yjunechoe<br>4 December 2021"
+output:
+  xaringan::moon_reader:
+    lib_dir: libs
+    css:
+      - default
+      - rladies
+      - rladies-fonts
+      - css/rladies-mod.css
+    nature:
+      ratio: 4:3
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+---
+
+```{r, include = F}
+ragg_png = function(...) {
+  ragg::agg_png(..., res = 150, units = "in")
+}
+knitr::opts_chunk$set(
+  dev = "ragg_png",
+  fig.width = 6,
+  message = FALSE,
+  warning = FALSE,
+  comment = " ",
+  cache = F
+)
+library(ggtrace)
+library(ggplot2)
+xaringanExtra::use_extra_styles()
+```
+
+# The ggplot internals beastiary
+
+--
+
+😮 {ggplot2} is old (2005~), but the last & most important overhaul of the internals (ggproto) was pretty recent ([v2.0.0](https://www.rstudio.com/blog/ggplot2-2-0-0/), December 2015)
+
+--
+
+⚠️ Guides on ggplot internals are extremely sparse and scattered, and many are also outdated (but see [[1](https://github.com/paleolimbot/ggdebug)], [[2](https://htmlpreview.github.io/?https://raw.githubusercontent.com/brodieG/ggbg/development/inst/doc/extensions.html)], [[3](https://cran.r-project.org/web/packages/gginnards/vignettes/user-guide-1.html)], [[4](https://cran.r-project.org/web/packages/lemon/vignettes/gtable_show_lemonade.html)], [[5](https://cran.r-project.org/web/packages/gridExtra/vignettes/gtable.html)])
+
+--
+
+❗ There are no smooth entry points for aspiring developers. Even for experienced users, the sheer scale and foreignness is demotivating.
+
+--
+
+❗❗ More over, you can't learn this through exposure, _by design_. This unintentionally creates a monopoly around the knowledge of how ggplot works under the hood.
+
+--
+
+🤔 Do we patiently wait, relying on the mercy and sacrifice of experienced developers to host webinars, release official guides, and hold our hands through this journey?
+
+---
+
+# What's so hard about learning it ourselves?
+
+--
+
+🤓 Many useRs are self-taught and learn through trial and error
+
+--
+
+In fact a lot of what happens in the building of a ggplot is actually just good ol' ✨data wrangling✨
+
+--
+
+> [ggprotos] are classes that are **stateless** in the sense that you have an object that receives some data and does something to the data and spits out the data again...
+
+> ...you should think of [ggprotos] as kind of **factories**. You have this assembly line and each method is... **a robot arm**. 
+
+<p style='text-align:right;'><em>- Thomas Lin Pedersen, rstudio::conf (2020)</em></figcaption>
+
+---
+
+class: center, middle, inverse
+background-image: url(img/ggproto-factory.png)
+background-size: contain
+
+---
+
+# What's so hard about learning it ourselves?
+
+Many useRs are self-taught and learn through trial and error
+
+And a lot of what happens in the building of a ggplot is actually just good ol' ✨data wrangling✨
+
+> [ggprotos] are classes that are **stateless** in the sense that you have an object that receives some data and does something to the data and spits out the data again...
+
+> ...you should think of [ggprotos] as kind of **factories**. You have this assembly line and each method is... **a robot arm**. 
+
+<p style='text-align:right;'><em>- Thomas Lin Pedersen, rstudio::conf (2020)</em></p>
+
+<strong style='color: #804782;'>We <em>can</em> learn ggplot internals ourselves - we just need a tool that allows us to peak inside and manipulate the assembly line as it runs</strong>
+
+---
+
+# A different kind of accessibility problem
+
+--
+
+We want to interact with ggplot internals _from the outside_
+
+--
+
+But our familiar debugging tools fail us.
+
+--
+
+-----
+
+<blockquote cite="https://yutani.rbind.io/post/a-tip-to-debug-ggplot2/">
+  "You cannot use breakpoints to dig into [ggprotos]."
+</blockquote>
+<p style='text-align:right;'><em>- Hiroaki Yutani, blog post (2019)</em></p>
+
+<blockquote cite="https://github.com/paleolimbot/ggdebug/blob/master/R/trace.R">
+  "[trace()] and [untrace()] ... do not work with ggproto methods"
+</blockquote>
+<p style='text-align:right;'><em>- Dewey Dunnington, {ggdebug} (2019)</em></p>
+
+<blockquote cite="https://www.rstudio.com/resources/rstudioconf-2020/extending-your-ability-to-extend-ggplot2/">
+  "ggproto methods are just horrible to debug."
+</blockquote>
+<p style='text-align:right;'><em>- Thomas Lin Pedersen, rstudio::conf (2020)</em></p>
+
+---
+
+# Enter {ggtrace}!
+
+--
+
+**Goal: expose the internals of ggplot in the familiar _functional-programming_ sense, for learners and developers alike**
+
+--
+
+Here, we make some simplifying assumptions about ggplot internals:
+
+--
+
+The **input** - the _data_ being plotted & the _instructions_ for plotting it
+
+  - The user-facing code `ggplot(data) + geom_*(...) + ...`
+
+--
+
+The **assembly line** - the _execution_ of plotting instructions on the data
+
+  - Each layer's Stat/Geom/Position methods transform the data
+
+--
+
+The **output** - the data prepared for rendering _graphical primitives_
+
+  - Between `ggplot_build()` and `ggplot_gtable()` at `print()`
+
+
+---
+
+# Our input
+
+```{r, fig.height=4.5}
+penguins_base <- ggplot(na.omit(palmerpenguins::penguins)) +
+  aes(x = species, color = species) +
+  theme_minimal()
+
+my_plot <- penguins_base +
+  geom_bar(size = 2)
+
+my_plot
+```
+
+---
+
+# Our target assembly line
+
+```{r, eval = FALSE}
+# ggplot2:::print.ggplot
+function (x, newpage = is.null(vp), vp = NULL, ...) 
+{
+  set_last_plot(x)
+  if (newpage) 
+    grid.newpage()
+  grDevices::recordGraphics(requireNamespace("ggplot2", quietly = TRUE), 
+                            list(), getNamespace("ggplot2"))
+  data <- ggplot_build(x)       #<<
+  gtable <- ggplot_gtable(data)
+  if (is.null(vp)) {
+    grid.draw(gtable)
+  }
+  else {
+    if (is.character(vp)) 
+      seekViewport(vp)
+    else pushViewport(vp)
+    grid.draw(gtable)
+    upViewport()
+  }
+  if (isTRUE(getOption("BrailleR.VI")) && rlang::is_installed("BrailleR")) {
+    print(asNamespace("BrailleR")$VI(x))
+  }
+  invisible(x)
+}
+```
+
+---
+
+# Our output
+
+```{r}
+names(ggplot_build(my_plot))
+ggplot_build(my_plot)$data[[1]]
+```
+
+--
+
+```{r}
+layer_data(my_plot, 1)
+```
+
+---
+
+# Example: delayed aesthetic evaluation (1)
+
+You can use `after_*()` functions to access computed variables
+
+.pull-left[
+```{r eval = FALSE}
+penguins_plot1 <- penguins_base +
+  geom_bar(size = 2) +
+  aes(
+    y = after_stat(count),
+    fill = after_scale(alpha(color, .5))
+  )
+```
+]
+
+.pull-right[
+```{r, echo = FALSE, fig.height=3.5}
+penguins_plot1 <- penguins_base +
+  geom_bar(size = 2) +
+  aes(
+    y = after_stat(count),
+    fill = after_scale(alpha(color, .5))
+  )
+penguins_plot1
+```
+]
+
+--
+
+```{r}
+layer_data(penguins_plot1)
+```
+
+
+---
+
+# Example: delayed aesthetic evaluation (2)
+
+How would you explain this behavior?
+
+.pull-left[
+```{r eval = FALSE}
+penguins_plot2 <- penguins_base +
+  geom_bar(
+    size = 2,
+    fill = "orange" #<<
+  ) +
+  aes(
+    y = after_stat(count),
+    fill = after_scale(alpha(color, .5))
+  )
+```
+]
+
+.pull-right[
+```{r, echo = FALSE, fig.height=3.5}
+penguins_plot2 <- penguins_base +
+  geom_bar(
+    size = 2,
+    fill = "orange"
+  ) +
+  aes(
+    y = after_stat(count),
+    fill = after_scale(alpha(color, .5))
+  )
+penguins_plot2
+```
+]
+
+```{r}
+layer_data(penguins_plot2)
+```
+
+---
+
+# Testing a hypothesis about the internals
+
+**Does the `fill` aesthetic even get computed in `penguins_plot2`**?
+
+This question cannot be answered just by looking at the transformed data from the `ggplot_build()` output - both answers are consistent
+
+We need to track the data as it gets transformed _in the assembly line_
+
+---
+
+# Inspecting the assembly line
+
+In a true know-nothing fashion, we're just going to log the data after every step that transforms it inside `ggplot_build()`
+
+```{r}
+data_assigning_steps <- c(8, 9, 11, 12, 13, 17, 18, 19, 21, 22, 26, 29, 30, 31)
+as.character(ggbody(ggplot2:::ggplot_build.ggplot)[data_assigning_steps])
+```
+
+---
+
+# Inspecting the assembly line
+
+```{r, message=TRUE, fig.show='hide'}
+ggtrace(method = ggplot2:::ggplot_build.ggplot,
+        trace_steps = data_assigning_steps + 1,
+        trace_exprs = quote(data[[1]]),
+        verbose = FALSE)
+penguins_plot2
+Filter(Negate(is.null), lapply(last_ggtrace(), `[[`, "fill"))
+```
+
+---
+
+# Inspecting the assembly line (again)
+
+Are we really sure that the `fill` aesthetic simply doesn't get calculated when it's supplied as a constant?
+
+Let's jump into the first robot arm that computes `fill`, and see whether it was ever calculated internally
+
+```{r}
+data_assigning_steps[which(sapply(last_ggtrace(), function(x) {"fill" %in% colnames(x)}))]
+ggbody(ggplot2:::ggplot_build.ggplot)[[29]]
+```
+
+```{r}
+as.character(ggbody(ggplot2:::Layer$compute_geom_2))
+```
+
+---
+
+# Inspecting the assembly line (again)
+
+```{r, error = TRUE}
+class(geom_bar()$geom)
+ggbody(GeomBar$use_defauts)
+invisible(capture.output(ggbody(GeomBar$use_defaults, inherit = TRUE)))
+```
+
+Again in a true know-nothing fashion, we log the value of `data` at every step
+
+```{r message = FALSE, fig.show = 'hide'}
+ggtrace(method = Geom$use_defaults,
+        trace_steps = seq_along(ggbody(Geom$use_defaults)),
+        trace_exprs = quote(data),
+        verbose = FALSE)
+penguins_plot2
+```
+
+---
+
+# Inspecting the assembly line (again)
+
+Looks like we were wrong! Step 7 of `Geom$use_defaults` calculates the `fill` aesthetic according to `after_scale()`
+
+```{r}
+Filter(Negate(is.null), lapply(last_ggtrace(), `[[`, "fill"))
+which(sapply(last_ggtrace(), function(x) {"fill" %in% colnames(x)}))
+```
+
+---
+
+# Yay!
+
+[Check out the answer key for yourself!](https://github.com/tidyverse/ggplot2/blob/65d3bfc21b279a799a5450272664625b01c8778f/R/geom-.r#L124-L150)
+
+```{r, echo = FALSE}
+knitr::include_graphics("img/after_scale-resolved.png", error = FALSE)
+```
+
+---
+
+# The End
+
+**Links**:
+
+- Github repo: [https://github.com/yjunechoe/ggtrace/](https://github.com/yjunechoe/ggtrace/)
+- pkgdown website: [https://yjunechoe.github.io/ggtrace/](https://yjunechoe.github.io/ggtrace/)
+- slides: []
+
+**Vignettes**:
+
+- [FAQ](https://yjunechoe.github.io/ggtrace/articles/FAQ.html)
+- [`ggplot_build` showcase](https://xenodochial-franklin-34d864.netlify.app/)
+- [`aes_eval` showcase](https://goofy-lovelace-d330f8.netlify.app/)
+- [{ggxmean} debugging case study](https://yjunechoe.github.io/ggtrace/articles/casestudy-ggxmean.html)
+
